@@ -22,8 +22,11 @@ import torch
 from llava.model import *
 from llava.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 
+import logging
+logging.basicConfig(level = logging.INFO, format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+eval_logger = logging.getLogger(__name__)
 
-def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, load_4bit=False, device_map="auto", device="cuda", use_flash_attn=False, **kwargs):
+def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, load_4bit=False, device_map="auto", device="cuda", use_flash_attn=False, dynamic_sparse=True, **kwargs):
     kwargs = {"device_map": device_map, **kwargs}
 
     if device != "cuda":
@@ -114,11 +117,20 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                 )
             else:
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
-                model = LlavaLlamaForCausalLM.from_pretrained(
-                    model_path,
-                    low_cpu_mem_usage=True,
-                    **kwargs
-                )
+                if dynamic_sparse:
+                    eval_logger.info("Start Sparse Inference...")
+                    model = LlavaLlamaDynamicForCausalLM.from_pretrained(
+                        model_path,
+                        low_cpu_mem_usage=True,
+                        **kwargs
+                    )
+                else:
+                    eval_logger.info("Start Normal Inference...")
+                    model = LlavaLlamaForCausalLM.from_pretrained(
+                        model_path,
+                        low_cpu_mem_usage=True,
+                        **kwargs
+                    )
     else:
         # Load language model
         if model_base is not None:
