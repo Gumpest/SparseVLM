@@ -176,7 +176,7 @@ class LlamaDynamicvitModel(LlamaModel):
                 past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
             )
             position_ids = position_ids.unsqueeze(0)    # position_ids.shape：torch.Size([1, 668])，从0到667
-
+        # print(position_ids)
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
@@ -246,7 +246,7 @@ class LlamaDynamicvitModel(LlamaModel):
                     else :
                         layer_outputs = decoder_layer(
                             hidden_states,
-                            policy = policy,
+                            policy=policy,
                             attention_mask=attention_mask,
                             position_ids=position_ids,
                             past_key_value=past_key_values,
@@ -260,7 +260,7 @@ class LlamaDynamicvitModel(LlamaModel):
                     # keep ratio
                     score = pred_score[:, :, 0] # B, L
                     # TODO: Random
-                    score = torch.rand(score.shape, dtype=score.dtype, device=score.device)
+                    # score = torch.rand(score.shape, dtype=score.dtype, device=score.device)
                     v_token_start = pre_prompt_length_list[0]
 
                     num_v_token = int(image_shape * self.token_ratio[idx_sprase_layer])
@@ -304,11 +304,12 @@ class LlamaDynamicvitModel(LlamaModel):
             else:
                 if output_hidden_states:
                     all_hidden_states += (hidden_states,)
-
+                # print("1____", position_ids)
                 if self.gradient_checkpointing and self.training:
                     layer_outputs = self._gradient_checkpointing_func(
                         decoder_layer.__call__,
                         hidden_states,
+                        policy,
                         attention_mask,
                         position_ids,
                         past_key_values,
@@ -318,12 +319,14 @@ class LlamaDynamicvitModel(LlamaModel):
                 else:
                     layer_outputs = decoder_layer(
                         hidden_states,
+                        policy=policy,
                         attention_mask=attention_mask,
                         position_ids=position_ids,
                         past_key_value=past_key_values,
                         output_attentions=output_attentions,
                         use_cache=use_cache,
                     )
+
                
             hidden_states = layer_outputs[0]
 
@@ -843,20 +846,8 @@ class LlamaDynamicvitForCausalLM(LlamaForCausalLM):
                     past_key_values=outputs.past_key_values,
                     hidden_states=outputs.last_hidden_state,
                     attentions=outputs.attentions,
-            )
-        )
-        # return super().forward(
-        #     input_ids=input_ids,                # None
-        #     attention_mask=attention_mask,      # torch.Size([1, 668])
-        #     position_ids=position_ids,          # None
-        #     past_key_values=past_key_values,    # None
-        #     inputs_embeds=inputs_embeds,        # torch.Size([1, 668, 4096])
-        #     labels=labels,                      # torch.Size([1, 668])
-        #     use_cache=use_cache,                # None
-        #     output_attentions=output_attentions,# None
-        #     output_hidden_states=output_hidden_states,  # None
-        #     return_dict=return_dict             # None
-        # )
+                ))
+
     @torch.no_grad()
     def generate(
         self,
