@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 import torch
 import torch.distributed as dist
 from torch import nn
+import torch.nn.functional as F
 
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
@@ -15,32 +16,7 @@ from transformers.generation.beam_constraints import DisjunctiveConstraint, Phra
 from transformers.generation.beam_search import BeamScorer, BeamSearchScorer, ConstrainedBeamSearchScorer
 from transformers.generation.configuration_utils import GenerationConfig
 from transformers.generation.logits_process import (
-    EncoderNoRepeatNGramLogitsProcessor,
-    EncoderRepetitionPenaltyLogitsProcessor,
-    EpsilonLogitsWarper,
-    EtaLogitsWarper,
-    ExponentialDecayLengthPenalty,
-    ForcedBOSTokenLogitsProcessor,
-    ForcedEOSTokenLogitsProcessor,
-    ForceTokensLogitsProcessor,
-    HammingDiversityLogitsProcessor,
-    InfNanRemoveLogitsProcessor,
-    LogitNormalization,
     LogitsProcessorList,
-    MinLengthLogitsProcessor,
-    MinNewTokensLengthLogitsProcessor,
-    NoBadWordsLogitsProcessor,
-    NoRepeatNGramLogitsProcessor,
-    PrefixConstrainedLogitsProcessor,
-    RepetitionPenaltyLogitsProcessor,
-    SequenceBiasLogitsProcessor,
-    SuppressTokensAtBeginLogitsProcessor,
-    SuppressTokensLogitsProcessor,
-    TemperatureLogitsWarper,
-    TopKLogitsWarper,
-    TopPLogitsWarper,
-    TypicalLogitsWarper,
-    UnbatchedClassifierFreeGuidanceLogitsProcessor,
 )
 from transformers.generation.stopping_criteria import (
     StoppingCriteriaList,
@@ -54,9 +30,6 @@ if TYPE_CHECKING:
 
 import math
 from typing import List, Optional, Tuple, Union
-import torch.nn.functional as F
-import torch
-import torch.nn as nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers import AutoConfig, AutoModelForCausalLM, \
                          LlamaConfig, LlamaModel, LlamaForCausalLM,LlamaPreTrainedModel,Cache,DynamicCache
@@ -292,7 +265,7 @@ class LlamaDynamicvitModel(LlamaModel):
 
                     layer_outputs = decoder_layer(
                             hidden_states = hidden_states,
-                            policy = policy,
+                            policy=None,
                             attention_mask=attention_mask,
                             position_ids=position_ids,
                             past_key_value=past_key_values,
@@ -304,7 +277,7 @@ class LlamaDynamicvitModel(LlamaModel):
             else:
                 if output_hidden_states:
                     all_hidden_states += (hidden_states,)
-                # print("1____", position_ids)
+
                 if self.gradient_checkpointing and self.training:
                     layer_outputs = self._gradient_checkpointing_func(
                         decoder_layer.__call__,

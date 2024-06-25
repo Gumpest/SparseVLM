@@ -12,6 +12,7 @@ dist
 
 # Data
 !**/alpaca-data-conversation.json
+playground
 
 # Editor
 .idea
@@ -26,7 +27,7 @@ checkpoints
 ckpts*
 
 .ipynb_checkpoints
-*.ipynb
+# *.ipynb
 
 # DevContainer
 !.devcontainer/*

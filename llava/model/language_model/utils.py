@@ -61,6 +61,15 @@ def  batch_index_select(x, idx):
     else:
         raise NotImplementedError
 
+def quick_batch_index_select(x, idx):
+
+    B, N, C = x.size()
+    N_new = idx.size(1)
+    offset = torch.arange(B, dtype=torch.long, device=x.device).view(B, 1) * N
+    idx = idx + offset
+    out = x.reshape(B*N, C)[idx.reshape(-1)].reshape(B, N_new, C)
+    
+    return out
 
 def softmax_with_policy_for_training(self, query_states, key_states, value_states, attention_mask, query_length, policy, eps=1e-6):    # attn : [2, 687, 32, 32] policy : [2, 687, 1]
     if attention_mask is not None:

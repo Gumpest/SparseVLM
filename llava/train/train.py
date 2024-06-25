@@ -64,6 +64,8 @@ class ModelArguments:
     mm_use_im_patch_token: bool = field(default=True)
     mm_patch_merge_type: Optional[str] = field(default='flat')
     mm_vision_select_feature: Optional[str] = field(default="patch")
+    s2: bool = field(default=False)
+    s2_scales: Optional[str] = field(default="336,672,1008")
 
 
 @dataclass
@@ -922,6 +924,9 @@ def train(attn_implementation=None):
         model.config.image_aspect_ratio = data_args.image_aspect_ratio
         model.config.tokenizer_padding_side = tokenizer.padding_side
         model.config.tokenizer_model_max_length = tokenizer.model_max_length
+
+        model.config.s2 = model_args.s2
+        model.config.s2_scales = model_args.s2_scales
 
         model.config.tune_mm_mlp_adapter = training_args.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter
         if model_args.tune_mm_mlp_adapter:
