@@ -1,6 +1,6 @@
 #!/bin/bash
 export CUDA_VISIBLE_DEVICES=0
-MODEL=llava-v1.5-1b-sparse-fixtea-test
+MODEL=llava-v1.5-1b-sparse-by-text
 python3 -m llava.eval.model_vqa_loader \
     --model-path /mnt/bn/ic-vlm/personal/zhangyuan/SparseVLM/checkpoints/$MODEL \
     --question-file ./playground/data/eval/MME/llava_mme.jsonl \

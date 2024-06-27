@@ -1,5 +1,5 @@
 #!/bin/bash
-# export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0
 
 deepspeed --master_port 21243 llava/train/sparse_train_mem.py \
     --deepspeed ./scripts/zero2.json \
@@ -17,7 +17,7 @@ deepspeed --master_port 21243 llava/train/sparse_train_mem.py \
     --image_aspect_ratio pad \
     --group_by_modality_length True \
     --bf16 True \
-    --output_dir ./checkpoints/llava-v1.5-1b-sparse-fixtea-test \
+    --output_dir ./checkpoints/test \
     --num_train_epochs 1 \
     --per_device_train_batch_size 4 \
     --per_device_eval_batch_size 4 \

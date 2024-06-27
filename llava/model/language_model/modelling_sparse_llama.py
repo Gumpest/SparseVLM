@@ -42,6 +42,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast,CausalLMOutput
 from transformers.generation.utils import GenerateOutput
 
 from .utils import *
+from .score import attn_vis_text, attn_vis_text_infer
 
 # Typing shortcuts
 GenerateNonBeamOutput = Union[GenerateDecoderOnlyOutput, GenerateEncoderDecoderOutput]
@@ -75,9 +76,6 @@ class LlamaDynamicvitModel(LlamaModel):
         self.pruning_loc = pruning_loc
         self.token_ratio = token_ratio
         self.embed_dim = config.hidden_size
-        self.score_predictor = nn.ModuleList(
-            [PredictorLG(self.embed_dim) for _ in range(len(pruning_loc))]
-        )
 
         self.layers = nn.ModuleList(
             [LlamaDynamicvitDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
@@ -182,20 +180,30 @@ class LlamaDynamicvitModel(LlamaModel):
         # ------------------------------------------- Sparse--------------------------------------------
         B, L, _ = hidden_states.shape
         idx_sprase_layer = 0
-        out_pred_prob = []
+        out_pred_prob = None
         init_n = self.init_token_total_shape + self.generate_process_count    # 668
         prev_decision = torch.ones(B, init_n, 1, dtype=hidden_states.dtype, device=hidden_states.device)
         policy = torch.ones(B, init_n, 1, dtype=hidden_states.dtype, device=hidden_states.device)
 
+        num_vis_token = image_shape
+
         for layer_idx, decoder_layer in enumerate(self.layers):
             # Sparse Layers
-            if layer_idx in self.pruning_loc:
-                pred_score = self.score_predictor[idx_sprase_layer](hidden_states, prev_decision).reshape(B, -1, 2)
-                # torch.Size([1, 327, 2])
+            if layer_idx in self.pruning_loc and len(pre_prompt_length_list) != 0:
                 
                 # Training
                 if self.training:
-                    hard_keep_decision = F.gumbel_softmax(pred_score, hard=True)[:, :, 0:1] * prev_decision
+                # torch.Size([1, 327, 2])
+                    v_token_start = pre_prompt_length_list[0] # 35
+                    text_token_start = v_token_start + image_shape # 611
+                    # TODO: Q[text], K[vision]: 
+                    # Infer: Q[text], K[vision]
+                    pred_score_vis = attn_vis_text(vis=hidden_states[:, v_token_start: text_token_start, :],\
+                                            text=hidden_states[:, text_token_start:, :], prev_decision=prev_decision[:, v_token_start: text_token_start, 0]) # B, 576
+                    # print(pred_score_vis)
+                    pred_score = torch.ones(B, init_n, dtype=hidden_states.dtype, device=hidden_states.device)
+                    pred_score[:, v_token_start: text_token_start] = pred_score_vis
+                    hard_keep_decision = pred_score.unsqueeze(2) * prev_decision
                     for i in range(len(pre_prompt_length_list)):        
                         prompt_length = pre_prompt_length_list[i]
                         hard_keep_decision[i,:prompt_length,] = 1       # 把pre_prompt不mask
@@ -203,7 +211,7 @@ class LlamaDynamicvitModel(LlamaModel):
                         text_token_start = prompt_length + image_shape
                         hard_keep_decision[i,text_token_start:,] = 1        # 把text_token不mask             
                         hard_keep_decision[i,token_length:,] = 0        # 把填充的token mask掉
-                    out_pred_prob.append(hard_keep_decision.reshape(B, init_n))
+
                     policy = hard_keep_decision
                     if self.gradient_checkpointing:
                         layer_outputs = self._gradient_checkpointing_func(
@@ -230,30 +238,24 @@ class LlamaDynamicvitModel(LlamaModel):
                 
                 # Inference
                 else:
-                    # keep ratio
-                    score = pred_score[:, :, 0] # B, L
-                    # TODO: Random
-                    # score = torch.rand(score.shape, dtype=score.dtype, device=score.device)
-                    v_token_start = pre_prompt_length_list[0]
+                    # num_v_token = int(image_shape * self.token_ratio[idx_sprase_layer])
+                    v_token_start = pre_prompt_length_list[0] # 35
+                    text_token_start = v_token_start + num_vis_token # 611
+                    pred_score_vis = attn_vis_text_infer(vis=hidden_states[:, v_token_start: text_token_start, :],\
+                                            text=hidden_states[:, text_token_start:, :]) # B, 576
 
-                    num_v_token = int(image_shape * self.token_ratio[idx_sprase_layer])
-                    v_score = score[:, v_token_start: v_token_start+image_shape]
-
-                    # delete policy
-                    delete_policy = torch.argsort(v_score, dim=1, descending=True)[:, num_v_token:]
-                    delete_policy = delete_policy + v_token_start  # return to original idx 
-
-                    policy = torch.ones(B, score.shape[1], dtype=hidden_states.dtype, device=hidden_states.device)
-                    policy.scatter_(1, delete_policy, 0)
+                    policy = torch.ones(B, hidden_states.shape[1], dtype=hidden_states.dtype, device=hidden_states.device)
+                    # print(layer_idx, policy[:, v_token_start: text_token_start].shape, pred_score_vis.shape)
+                    policy[:, v_token_start: text_token_start] = pred_score_vis
 
                     for batch in range(len(pre_prompt_length_list)):
                         # keep pre prompt     
                         prompt_length = pre_prompt_length_list[batch]
                         policy[batch,:prompt_length,] = 1
                         # keep question
-                        text_token_start = prompt_length + image_shape
                         policy[batch, text_token_start:,] = 1
 
+                    num_vis_token = pred_score_vis.sum()
                     select_token_idx = torch.where(policy == 1)[1].unsqueeze(0)  # B, L_new
                     # print("__1", hidden_states.shape, hidden_states, select_token_idx)
                     hidden_states = batch_index_select(hidden_states, select_token_idx)  # B, L, C
