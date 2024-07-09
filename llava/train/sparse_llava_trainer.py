@@ -443,10 +443,10 @@ class LLaVADynamicTrainer(Trainer):
         hidden_states = outputs.hidden_states
 
         # Predictor loss
-        pred_loss = 0.0
-        for i, score in enumerate(out_pred_prob):
-            pos_ratio = score.mean(1)
-            pred_loss = pred_loss + ((pos_ratio - self.keep_ratio[i]) ** 2).mean()
+        # pred_loss = 0.0
+        # for i, score in enumerate(out_pred_prob):
+        #     pos_ratio = score.mean(1)
+        #     pred_loss = pred_loss + ((pos_ratio - self.keep_ratio[i]) ** 2).mean()
 
         # Feature align loss
         with torch.no_grad():
@@ -487,6 +487,6 @@ class LLaVADynamicTrainer(Trainer):
                 )
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
-        total_loss = loss + pred_loss + align_loss
+        total_loss = loss + align_loss
         # print(loss, pred_loss, align_loss)
         return (total_loss, outputs) if return_outputs else total_loss

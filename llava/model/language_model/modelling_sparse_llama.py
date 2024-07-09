@@ -42,6 +42,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast,CausalLMOutput
 from transformers.generation.utils import GenerateOutput
 
 from .utils import *
+from .score import attn_postprocess
 
 # Typing shortcuts
 GenerateNonBeamOutput = Union[GenerateDecoderOnlyOutput, GenerateEncoderDecoderOutput]
@@ -65,7 +66,7 @@ class GenerationMode(ExplicitEnum):
 
 
 class LlamaDynamicvitModel(LlamaModel):
-    def __init__(self, config: LlamaConfig, pruning_loc=[6,12,18], token_ratio=[0.7,0.5,0.3]):
+    def __init__(self, config: LlamaConfig, pruning_loc=[9, 16, 20], token_ratio=[0.7,0.5,0.3]):
         super(LlamaModel,self).__init__(config)
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -75,9 +76,9 @@ class LlamaDynamicvitModel(LlamaModel):
         self.pruning_loc = pruning_loc
         self.token_ratio = token_ratio
         self.embed_dim = config.hidden_size
-        self.score_predictor = nn.ModuleList(
-            [PredictorLG(self.embed_dim) for _ in range(len(pruning_loc))]
-        )
+        # self.score_predictor = nn.ModuleList(
+        #     [PredictorLG(self.embed_dim) for _ in range(len(pruning_loc))]
+        # )
 
         self.layers = nn.ModuleList(
             [LlamaDynamicvitDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
@@ -182,29 +183,28 @@ class LlamaDynamicvitModel(LlamaModel):
         # ------------------------------------------- Sparse--------------------------------------------
         B, L, _ = hidden_states.shape
         idx_sprase_layer = 0
-        out_pred_prob = []
+        out_pred_prob = None
         init_n = self.init_token_total_shape + self.generate_process_count    # 668
         prev_decision = torch.ones(B, init_n, 1, dtype=hidden_states.dtype, device=hidden_states.device)
         policy = torch.ones(B, init_n, 1, dtype=hidden_states.dtype, device=hidden_states.device)
 
+        v_token_start = pre_prompt_length_list[0] if len(pre_prompt_length_list) != 0 else 0 # 35
+        text_token_start = v_token_start + image_shape # 611
+        v_token_num = image_shape
+
+        # select text tokens
+        v_t = hidden_states[:, v_token_start: text_token_start, :]
+        t_t = hidden_states[:, text_token_start: , :]
+        m_v_t = v_t @ t_t.transpose(1, 2) # [1, 576, 53]
+        m_v_t = m_v_t.softmax(2).mean(1) # [1, 53]
+        t_token_idx = torch.where(m_v_t > m_v_t.mean())
+
         for layer_idx, decoder_layer in enumerate(self.layers):
             # Sparse Layers
-            if layer_idx in self.pruning_loc:
-                pred_score = self.score_predictor[idx_sprase_layer](hidden_states, prev_decision).reshape(B, -1, 2)
-                # torch.Size([1, 327, 2])
+            if layer_idx in self.pruning_loc and len(pre_prompt_length_list) != 0 and hidden_states.shape[1] !=1:
                 
                 # Training
                 if self.training:
-                    hard_keep_decision = F.gumbel_softmax(pred_score, hard=True)[:, :, 0:1] * prev_decision
-                    for i in range(len(pre_prompt_length_list)):        
-                        prompt_length = pre_prompt_length_list[i]
-                        hard_keep_decision[i,:prompt_length,] = 1       # 把pre_prompt不mask
-                        token_length = token_length_list[i]   
-                        text_token_start = prompt_length + image_shape
-                        hard_keep_decision[i,text_token_start:,] = 1        # 把text_token不mask             
-                        hard_keep_decision[i,token_length:,] = 0        # 把填充的token mask掉
-                    out_pred_prob.append(hard_keep_decision.reshape(B, init_n))
-                    policy = hard_keep_decision
                     if self.gradient_checkpointing:
                         layer_outputs = self._gradient_checkpointing_func(
                             decoder_layer.__call__,
@@ -226,25 +226,48 @@ class LlamaDynamicvitModel(LlamaModel):
                             output_attentions=output_attentions,
                             use_cache=use_cache,
                         )
+
+                    attn_logits = layer_outputs[1]
+                    # self_attn_weights.shape [B, H, L, L]
+                    v_token_start = pre_prompt_length_list[0] # 35
+                    text_token_start = v_token_start + image_shape # 611
+                    v_token_num = image_shape
+
+                    pred_score_vis = attn_postprocess(attn_logits, v_token_start, v_token_num, text_token_start) # B, L_v
+                    # print(layer_idx, pred_score_vis, (pred_score_vis*prev_decision[:, v_token_start: v_token_start + image_shape,0]).sum(1))
+                    pred_score = torch.ones(B, init_n, dtype=hidden_states.dtype, device=hidden_states.device)
+                    pred_score[:, v_token_start: v_token_start + image_shape] = pred_score_vis
+                    hard_keep_decision = pred_score.unsqueeze(2) * prev_decision
+                    for i in range(len(pre_prompt_length_list)):        
+                        prompt_length = pre_prompt_length_list[i]
+                        hard_keep_decision[i,:prompt_length,] = 1       # 把pre_prompt不mask
+                        token_length = token_length_list[i]   
+                        text_token_start = prompt_length + image_shape
+                        hard_keep_decision[i,text_token_start:,] = 1        # 把text_token不mask             
+                        hard_keep_decision[i,token_length:,] = 0        # 把填充的token mask掉
+
+                    policy = hard_keep_decision
                     prev_decision = hard_keep_decision
                 
                 # Inference
                 else:
-                    # keep ratio
-                    score = pred_score[:, :, 0] # B, L
-                    # TODO: Random
-                    # score = torch.rand(score.shape, dtype=score.dtype, device=score.device)
-                    v_token_start = pre_prompt_length_list[0]
+                    layer_outputs = decoder_layer(
+                            hidden_states = hidden_states,
+                            policy=None,
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                            past_key_value=past_key_values,
+                            output_attentions=output_attentions,
+                            use_cache=use_cache,
+                    )
 
-                    num_v_token = int(image_shape * self.token_ratio[idx_sprase_layer])
-                    v_score = score[:, v_token_start: v_token_start+image_shape]
+                    attn_logits = layer_outputs[2]
+                    
+                    pred_score_vis = attn_postprocess(attn_logits, v_token_start, v_token_num, text_token_start, t_token_idx) # B, L_v
 
-                    # delete policy
-                    delete_policy = torch.argsort(v_score, dim=1, descending=True)[:, num_v_token:]
-                    delete_policy = delete_policy + v_token_start  # return to original idx 
-
-                    policy = torch.ones(B, score.shape[1], dtype=hidden_states.dtype, device=hidden_states.device)
-                    policy.scatter_(1, delete_policy, 0)
+                    policy = torch.ones(B, hidden_states.shape[1], dtype=hidden_states.dtype, device=hidden_states.device)
+                    # print(layer_idx, policy[:, v_token_start:text_token_start].shape, pred_score_vis.shape)
+                    policy[:, v_token_start:text_token_start] = pred_score_vis.type(dtype = hidden_states.dtype)
 
                     for batch in range(len(pre_prompt_length_list)):
                         # keep pre prompt     
@@ -255,23 +278,15 @@ class LlamaDynamicvitModel(LlamaModel):
                         policy[batch, text_token_start:,] = 1
 
                     select_token_idx = torch.where(policy == 1)[1].unsqueeze(0)  # B, L_new
-                    # print("__1", hidden_states.shape, hidden_states, select_token_idx)
-                    hidden_states = batch_index_select(hidden_states, select_token_idx)  # B, L, C
-                    # print("__2", hidden_states.shape, hidden_states)
-
-                    # set new continuous position ids
+                    layer_outputs = (batch_index_select(layer_outputs[0], select_token_idx), layer_outputs[1])  # B, L, C
                     position_ids = position_ids[:, :len(select_token_idx[0])]
-                    prev_decision = batch_index_select(prev_decision, select_token_idx)
+                    prev_decision = policy
+                    
+                    # update
+                    v_token_num = pred_score_vis.sum() # B == 1
+                    # print(layer_idx, v_token_num)
+                    text_token_start = v_token_start + v_token_num
 
-                    layer_outputs = decoder_layer(
-                            hidden_states = hidden_states,
-                            policy=None,
-                            attention_mask=attention_mask,
-                            position_ids=position_ids,
-                            past_key_value=past_key_values,
-                            output_attentions=output_attentions,
-                            use_cache=use_cache,
-                    )
                 idx_sprase_layer = idx_sprase_layer + 1
             # Normal Layers
             else:
@@ -623,7 +638,7 @@ class LlamaDynamicvitSdpaAttention(LlamaSdpaAttention):
 
         # Change
         if not self.training:
-            attn_output = torch.nn.functional.scaled_dot_product_attention(
+            attn_output, attn_logits = scaled_dot_product_attention(
                 query_states,
                 key_states,
                 value_states,
@@ -633,7 +648,7 @@ class LlamaDynamicvitSdpaAttention(LlamaSdpaAttention):
                 is_causal=self.is_causal and attention_mask is None and q_len > 1,
             )
         else:
-            attn_output = scaled_dot_product_attention_with_policy(
+            attn_output, attn_logits = scaled_dot_product_attention_with_policy(
                 query_states,
                 key_states,
                 value_states,
@@ -649,7 +664,7 @@ class LlamaDynamicvitSdpaAttention(LlamaSdpaAttention):
 
         attn_output = self.o_proj(attn_output)
 
-        return attn_output, None, past_key_value
+        return attn_output, None, past_key_value, attn_logits
 
 
 LLAMA_ATTENTION_CLASSES = {
@@ -707,7 +722,7 @@ class LlamaDynamicvitDecoderLayer(LlamaDecoderLayer):
 
         # ------------------------ ADD attribute "policy" -----------------------------------
         # Self Attention
-        hidden_states, self_attn_weights, present_key_value = self.self_attn(
+        hidden_states, self_attn_weights, present_key_value, attn_logits = self.self_attn(
             hidden_states=hidden_states,
             policy=policy,
             attention_mask=attention_mask,
@@ -737,6 +752,8 @@ class LlamaDynamicvitDecoderLayer(LlamaDecoderLayer):
 
         if use_cache:
             outputs += (present_key_value,)
+
+        outputs += (attn_logits, )
 
         return outputs
 

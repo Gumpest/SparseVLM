@@ -97,11 +97,17 @@ class CLIPVisionTowerS2(CLIPVisionTower):
         self.s2_scales.sort()
         self.s2_split_size = self.s2_scales[0]
         self.s2_image_size = self.s2_scales[-1]
+        self.s2_manner = getattr(args, 's2_manner', 'channel')
 
         super().__init__(vision_tower, args, delay_load)
 
         try:
-            from s2wrapper import forward as multiscale_forward
+            if args.s2_manner == 'channel':
+                from s2wrapper import forward as multiscale_forward
+            elif args.s2_manner == 'token':
+                from llava.model.s2wrapper import forward as multiscale_forward
+            else:
+                pass
         except ImportError:
             raise ImportError('Package s2wrapper not found! Please install by running: \npip install git+https://github.com/bfshi/scaling_on_scales.git')
         self.multiscale_forward = multiscale_forward
@@ -135,9 +141,13 @@ class CLIPVisionTowerS2(CLIPVisionTower):
                 image_features.append(image_feature)
         else:
             image_features = self.multiscale_forward(self.forward_feature, images, img_sizes=self.s2_scales, max_split_size=self.s2_split_size)
-
+        # print(image_features.shape) [32, 1728, 1024]
         return image_features
 
     @property
     def hidden_size(self):
-        return self.config.hidden_size * len(self.s2_scales)
+        return self.config.hidden_size * 3  if self.s2_manner == 'channel' else self.config.hidden_size 
+
+    @property
+    def num_patches(self):
+        return (self.config.image_size // self.config.patch_size) if self.s2_manner == 'channel' else  ((self.config.image_size // self.config.patch_size) ** 2) * len(self.s2_scales)

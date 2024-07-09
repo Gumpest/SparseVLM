@@ -153,8 +153,10 @@ def scaled_dot_product_attention_with_policy(query, key, value, policy, attn_mas
     attn_weight = query @ key.transpose(-2, -1) * scale_factor
     attn_weight += attn_bias.to(device=query.device)
     attn_weight = softmax_with_policy(attn_weight, policy)
+    attn_logits = attn_weight.clone().detach()
+
     attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
-    return attn_weight @ value
+    return attn_weight @ value, attn_logits
 
 
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None) -> torch.Tensor:
@@ -175,5 +177,7 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     attn_weight = query @ key.transpose(-2, -1) * scale_factor
     attn_weight += attn_bias.to(query.device)
     attn_weight = torch.softmax(attn_weight, dim=-1)
+    attn_logits = attn_weight
+
     attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
-    return attn_weight @ value
+    return attn_weight @ value, attn_logits
