@@ -66,7 +66,7 @@ class GenerationMode(ExplicitEnum):
 
 
 class LlamaDynamicvitModel(LlamaModel):
-    def __init__(self, config: LlamaConfig, pruning_loc=[9, 16, 20], token_ratio=[0.7,0.5,0.3]):
+    def __init__(self, config: LlamaConfig, pruning_loc=[1, 7, 16, 20], token_ratio=[0.7,0.5,0.3]):
         super(LlamaModel,self).__init__(config)
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -233,7 +233,7 @@ class LlamaDynamicvitModel(LlamaModel):
                     text_token_start = v_token_start + image_shape # 611
                     v_token_num = image_shape
 
-                    pred_score_vis = attn_postprocess(attn_logits, v_token_start, v_token_num, text_token_start) # B, L_v
+                    pred_score_vis = attn_postprocess(attn_logits, v_token_start, v_token_num, text_token_start, layer_idx) # B, L_v
                     # print(layer_idx, pred_score_vis, (pred_score_vis*prev_decision[:, v_token_start: v_token_start + image_shape,0]).sum(1))
                     pred_score = torch.ones(B, init_n, dtype=hidden_states.dtype, device=hidden_states.device)
                     pred_score[:, v_token_start: v_token_start + image_shape] = pred_score_vis
@@ -263,7 +263,7 @@ class LlamaDynamicvitModel(LlamaModel):
 
                     attn_logits = layer_outputs[2]
                     
-                    pred_score_vis = attn_postprocess(attn_logits, v_token_start, v_token_num, text_token_start, t_token_idx) # B, L_v
+                    pred_score_vis = attn_postprocess(attn_logits, v_token_start, v_token_num, text_token_start, t_token_idx, layer_idx) # B, L_v
 
                     policy = torch.ones(B, hidden_states.shape[1], dtype=hidden_states.dtype, device=hidden_states.device)
                     # print(layer_idx, policy[:, v_token_start:text_token_start].shape, pred_score_vis.shape)

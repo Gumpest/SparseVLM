@@ -66,7 +66,7 @@ class ModelArguments:
     mm_vision_select_feature: Optional[str] = field(default="patch")
     s2: bool = field(default=False)
     s2_scales: Optional[str] = field(default="336,672,1008")
-    s2_manner: Optional[str] = field(default="channel")
+    s2_manner: Optional[str] = field(default="token")
 
 
 @dataclass

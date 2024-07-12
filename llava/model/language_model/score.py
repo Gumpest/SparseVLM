@@ -47,7 +47,7 @@ def attn_vis_text(vis, text, prev_decision):
     return torch.where(attn_weights >= thresh, 1, 0)
 
 
-def attn_postprocess(self_attn_weights, v_token_start, v_token_num, text_token_start, t_token_idx):
+def attn_postprocess(self_attn_weights, v_token_start, v_token_num, text_token_start, t_token_idx, layer_idx):
     '''
     self_attn_weights: [B, H, L, L]
     '''
@@ -55,10 +55,12 @@ def attn_postprocess(self_attn_weights, v_token_start, v_token_num, text_token_s
     # self_attn_weights = self_attn_weights.max(1) # B, L[Q], L[K]
 
     t_token_idx = t_token_idx[1] + text_token_start
-    relation_vis_text = self_attn_weights[:, text_token_start: , v_token_start: v_token_start+v_token_num] # B, L2, L1
+    relation_vis_text = self_attn_weights[:, t_token_idx , v_token_start: v_token_start+v_token_num] # B, L2, L1
     relation_vis_text = relation_vis_text.mean(1) # B, L1
 
     thresh = relation_vis_text.mean(1) # B
+    if layer_idx == 1:
+        thresh = 0.6 * thresh
 
     mask = []
     for b in range(self_attn_weights.shape[0]):
